@@ -1,0 +1,96 @@
+name: Dependabot Auto-Merge
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: Auto-merge Dependabot PR
+    runs-on: ubuntu-latest
+    # Only run on successful CI workflow runs (not when triggered by PR events directly)
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Auto-merge Dependabot PRs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // Get all open Dependabot PRs
+            const { data: prs } = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100
+            });
+
+            for (const pr of prs.data) {
+              // Only process Dependabot PRs
+              if (pr.user.login !== 'dependabot[bot]') {
+                continue;
+              }
+
+              console.log(`Processing Dependabot PR #${pr.number}: ${pr.title}`);
+
+              // Check if PR is mergeable
+              if (!pr.mergeable) {
+                console.log(`PR #${pr.number} is not mergeable yet`);
+                continue;
+              }
+
+              // Get the combined status for the PR's head branch
+              try {
+                const { data: combinedStatus } = await github.rest.repos.getCombinedStatusForRef({
+                  owner,
+                  repo,
+                  ref: pr.head.ref
+                });
+
+                console.log(`PR #${pr.number} status: ${combinedStatus.state}`);
+
+                // Only merge if all checks passed
+                if (combinedStatus.state === 'success') {
+                  // Add auto-merge label or comment
+                  await github.rest.issues.addLabels({
+                    owner,
+                    repo,
+                    issue_number: pr.number,
+                    labels: ['automerge']
+                  });
+
+                  // Enable auto-merge via REST API
+                  try {
+                    await github.rest.pulls.merge({
+                      owner,
+                      repo,
+                      pull_number: pr.number,
+                      merge_method: 'squash'
+                    });
+                    console.log(`Successfully merged PR #${pr.number}`);
+                  } catch (error) {
+                    console.log(`Could not merge PR #${pr.number}: ${error.message}`);
+                  }
+                } else if (combinedStatus.state === 'pending') {
+                  console.log(`PR #${pr.number} checks are still pending`);
+                } else {
+                  console.log(`PR #${pr.number} checks failed or are in error state: ${combinedStatus.state}`);
+                }
+              } catch (error) {
+                console.log(`Error checking status for PR #${pr.number}: ${error.message}`);
+              }
+            }
