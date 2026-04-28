@@ -743,7 +743,10 @@ export default function App() {
 
   // Detect SharedArrayBuffer and threading capabilities
   useEffect(() => {
-    const sabAvailable = typeof SharedArrayBuffer !== 'undefined';
+    // Detect Tauri via __TAURI__ global (set by @tauri-apps/api)
+    // In Tauri webview, we can enable WASM threading even without COOP/COEP
+    const isTauri = !!(window.__TAURI__ || window.tauri);
+    const sabAvailable = isTauri || typeof SharedArrayBuffer !== 'undefined';
     const threads = sabAvailable ? (navigator.hardwareConcurrency || 1) : 1;
     setThreadingStatus({ sab: sabAvailable, threads });
   }, []);
